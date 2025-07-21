@@ -50,7 +50,7 @@ export class UserController {
 
                 const { error: uploadError } = await supabase
                     .storage
-                    .from('YOUR_BUCKET_NAME')
+                    .from('womensafety')
                     .upload(fileName, req.file.buffer, {
                         contentType: req.file.mimetype
                     });
