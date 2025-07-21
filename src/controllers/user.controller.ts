@@ -4,6 +4,7 @@ import { Request, Response } from 'express';
 import { PrismaClient, UserTypes, UserStatus } from '../generated/prisma';
 import bcrypt from 'bcrypt';
 import jwt from "jsonwebtoken"
+import { createClient } from '@supabase/supabase-js';
 import { config } from 'dotenv';
 config(); // Load .env variables at the start
 
@@ -21,47 +22,59 @@ const prisma = new PrismaClient();
 
 export class UserController {
 
-    static async registerUser(req: any, res: Response): Promise<Response> {
-        try {
-            let { email, name, password, type, location, phone } = req.body;
+    static async registerUser(req: Request, res: Response): Promise<Response> {
+        const supabase = createClient(
+            process.env.SUPABASE_URL!,
+            process.env.SUPABASE_SERVICE_ROLE_KEY!
+        );
 
+        try {
+            const { email, name, password, type, location, phone } = req.body;
 
             if (!email || !name || !password || !type) {
                 return res.status(400).json({ error: 'Missing required fields' });
             }
 
-            const user = await prisma.users.findFirst({
+            const existingUser = await prisma.users.findFirst({
+                where: { OR: [{ email }, { mobile: phone }] }
+            });
 
-                where: {
-                    OR: [{ email }, { mobile: phone }]
-                },
-
-            })
-            const salt = await bcrypt.genSalt(10);
-            const hashedPassword = await bcrypt.hash(password, salt);
-
-            if (user) {
-                return res.status(401).json({ message: "user with this email/phone exists!" })
+            if (existingUser) {
+                return res.status(401).json({ message: 'User with this email/phone exists!' });
             }
 
-            // Handle filePath from multer upload if exists
             let filePath = '';
+
             if (req.file) {
-                filePath = `/uploads/${req.file.filename}`;
-            } else if (req.body.filePath) {
-                filePath = req.body.filePath;
+                const fileName = `users/${Date.now()}-${req.file.originalname}`;
+
+                const { error: uploadError } = await supabase
+                    .storage
+                    .from('YOUR_BUCKET_NAME')
+                    .upload(fileName, req.file.buffer, {
+                        contentType: req.file.mimetype
+                    });
+
+                if (uploadError) {
+                    console.error(uploadError);
+                    return res.status(500).json({ error: 'File upload failed.' });
+                }
+
+                filePath = `${process.env.SUPABASE_URL}/storage/v1/object/public/YOUR_BUCKET_NAME/${fileName}`;
             }
+
+            const hashedPassword = await bcrypt.hash(password, 10);
 
             const newUser = await prisma.users.create({
                 data: {
                     email,
                     name,
                     location,
-                    password: hashedPassword, // Hash in production
-                    type: type as UserTypes,
+                    password: hashedPassword,
+                    type,
                     mobile: phone,
                     filePath,
-                    userStatus: UserStatus.INPROGRESS
+                    userStatus: 'INPROGRESS'
                 }
             });
 
@@ -72,6 +85,8 @@ export class UserController {
             return res.status(500).json({ error: 'Internal server error' });
         }
     }
+
+
 
     static async getUser(req: Request, res: Response): Promise<Response> {
         try {
